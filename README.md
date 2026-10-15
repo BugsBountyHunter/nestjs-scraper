@@ -103,13 +103,15 @@ docker compose up -d --scale app=3                # horizontal worker scaling
 
 | Script | Purpose |
 |--------|---------|
-| `npm test` / `npm run test:cov` | Unit tests / coverage |
+| `npm test` / `npm run test:cov` | Unit tests / coverage (fails below the thresholds in `package.json` → `jest.coverageThreshold`) |
 | `npm run lint` / `npm run lint:fix` | ESLint (flat config in `eslint.config.mjs`) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run smoke:stealth` / `smoke:phase3` | Live anti-detection smoke tests |
 | `npm run capture:fixtures` | Refresh parser fixture HTML |
 
 One-off pixelscan investigation scripts live in `scripts/diagnostics/`.
+
+**Coverage gate** — `test:cov` enforces a ratchet: global thresholds are set at the current floor (target 80%), and `src/scraper/security/` has a stricter bar of its own. Raise the numbers whenever coverage goes up; never lower them to make a build pass. `main.ts` and `*.module.ts` (DI wiring only) are excluded from coverage.
 
 ---
 
