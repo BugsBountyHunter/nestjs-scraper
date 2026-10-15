@@ -216,6 +216,7 @@ SCRAPER_MAX_DELAY_MS=10000
   - Validate: title, company, location, postedAt, jobUrl
 - [x] Build `LinkedInCompanyParser` for company overview pages (+ company normalizer)
 - [x] Handle parse errors gracefully — `OrchestratorService.parseSafely()` stores `{ parseError: true }` with `status: 'failed'` instead of retrying
+- [x] Flag empty results — pages that parse but lack the entity's identifying field (profile/company `name`, at least one job) are stored as `status: 'partial'`, counted as `partial` in `scraper_jobs_total`, and not URL-cached so they are retried later (`assessCompleteness()` in `src/pipeline/normalizers/result-completeness.ts`)
 - [ ] Add selector versioning — LinkedIn changes selectors frequently
 - [x] Write unit tests for each parser with fixture HTML files (`src/pipeline/parsers/__fixtures__/`)
 

@@ -87,6 +87,31 @@ describe('OrchestratorService', () => {
     expect(deps.urlCache.markCached).toHaveBeenCalledWith(URL);
   });
 
+  it('stores an empty-but-parsed page as partial and counts it as partial', async () => {
+    const { service, deps } = setup();
+    deps.profileParser.parse.mockReturnValue({ name: null, headline: null, experience: [] });
+
+    await service.run(job);
+
+    expect(deps.storage.save).toHaveBeenCalledWith(expect.objectContaining({ jobId: '42', status: 'partial' }));
+    const metric = await deps.metrics.jobsTotal.get();
+    const byStatus = Object.fromEntries(metric.values.map((v) => [v.labels.status, v.value]));
+    expect(byStatus).toEqual({ partial: 1 });
+    expect(deps.urlCache.markCached).not.toHaveBeenCalled();
+  });
+
+  it('counts a parse failure as failed in metrics, not success', async () => {
+    const { service, deps } = setup();
+    deps.profileParser.parse.mockImplementation(() => {
+      throw new Error('selector missing');
+    });
+
+    await service.run(job);
+
+    const metric = await deps.metrics.jobsTotal.get();
+    expect(metric.values.map((v) => v.labels.status)).toEqual(['failed']);
+  });
+
   it('returns early on a cache hit without opening a browser', async () => {
     const { service, deps } = setup();
     deps.urlCache.isCached.mockResolvedValue(true);

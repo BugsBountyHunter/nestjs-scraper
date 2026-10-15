@@ -15,6 +15,15 @@ import { MetricsService } from '../../monitoring/metrics.service';
 import { LinkedInSessionService } from '../session/linkedin-session.service';
 import { installNavigationGuard, NavigationBlockedError } from '../security/navigation-guard';
 import { ScrapeJobData } from './orchestrator.processor';
+import { assessCompleteness } from '../../pipeline/normalizers/result-completeness';
+import type { ScrapeResult } from '../../pipeline/storage/scrape-result.entity';
+
+type ResultStatus = ScrapeResult['status'];
+
+interface ScrapeOutcome {
+  data: Record<string, unknown>;
+  status: ResultStatus;
+}
 import { ScraperTarget } from '../../api/jobs/dto/create-job.dto';
 
 const MAX_RETRIES = 3;
@@ -69,11 +78,13 @@ export class OrchestratorService {
       try {
         await this.linkedInSession.inject(context);
         page = await context.newPage();
-        const result = await this.scrapeWithContext(page, context, jobData, proxy, attempt);
+        const { data: result, status } = await this.scrapeWithContext(page, context, jobData, proxy, attempt);
 
+        // The page loaded, so the domain is healthy even if the content was thin.
         this.circuitBreaker.recordSuccess(domain);
-        await this.urlCache.markCached(jobData.url);
-        this.metrics.jobsTotal.inc({ target: jobData.target, status: 'success' });
+        // Only cache complete results — an authwall/empty page should be retried later, not pinned for 24h.
+        if (status === 'success') await this.urlCache.markCached(jobData.url);
+        this.metrics.jobsTotal.inc({ target: jobData.target, status });
         this.metrics.jobDurationSeconds.observe({ target: jobData.target }, (Date.now() - startTime) / 1000);
         this.metrics.recordRequest(false);
 
@@ -117,7 +128,7 @@ export class OrchestratorService {
     jobData: ScrapeJobData,
     proxy: ProxyConfig | null,
     attempt: number,
-  ): Promise<unknown> {
+  ): Promise<ScrapeOutcome> {
     this.logger.log(`[attempt ${attempt + 1}] Navigating to ${jobData.url}`);
 
     const guard = await installNavigationGuard(page);
@@ -156,21 +167,24 @@ export class OrchestratorService {
     });
 
     this.browserPool.release(context);
-    return data;
+    return { data, status };
   }
 
   /**
    * Parser failures are stored as `status: 'failed'` with `parseError: true`
    * instead of retrying — the page loaded fine, so a retry would only burn
-   * proxy bandwidth on the same broken selectors.
+   * proxy bandwidth on the same broken selectors. Results that parsed but are
+   * missing the entity's identifying field are stored as `partial`.
    */
-  private parseSafely(
-    jobData: ScrapeJobData,
-    html: string,
-  ): { data: Record<string, unknown>; status: 'success' | 'failed' } {
+  private parseSafely(jobData: ScrapeJobData, html: string): ScrapeOutcome {
     try {
       const rawData = this.parse(jobData.target, html, jobData.url);
-      return { data: this.normalizer.normalize(jobData.target, rawData), status: 'success' };
+      const data = this.normalizer.normalize(jobData.target, rawData);
+      const status = assessCompleteness(jobData.target, data);
+      if (status === 'partial') {
+        this.logger.warn(`Partial result for ${jobData.url} — page parsed but key fields are empty`);
+      }
+      return { data, status };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Parse error for ${jobData.url}: ${message}`);
