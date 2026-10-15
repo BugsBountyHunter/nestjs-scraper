@@ -8,6 +8,7 @@ import { PipelineModule } from './pipeline/pipeline.module';
 import { QueueModule } from './queue/queue.module';
 import { MonitoringModule } from './monitoring/monitoring.module';
 import { ScrapeResult } from './pipeline/storage/scrape-result.entity';
+import { CreateScrapeResults1760500000000 } from './pipeline/storage/migrations/1760500000000-CreateScrapeResults';
 
 @Module({
   imports: [
@@ -28,7 +29,12 @@ import { ScrapeResult } from './pipeline/storage/scrape-result.entity';
         password: config.get('DB_PASSWORD', 'postgres'),
         database: config.get('DB_DATABASE', 'nestjs_scraper'),
         entities: [ScrapeResult],
+        // Postgres 13+ has gen_random_uuid() built in — no uuid-ossp extension needed
+        uuidExtension: 'pgcrypto',
+        migrations: [CreateScrapeResults1760500000000],
+        // Dev: auto-sync the schema. Production: apply migrations on boot instead.
         synchronize: config.get('NODE_ENV') !== 'production',
+        migrationsRun: config.get('NODE_ENV') === 'production',
         logging: config.get('NODE_ENV') === 'development',
       }),
       inject: [ConfigService],

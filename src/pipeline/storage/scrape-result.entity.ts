@@ -12,11 +12,11 @@ export class ScrapeResult {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
+  @Index('IDX_scrape_results_job_id')
   @Column({ type: 'varchar', nullable: true })
   jobId: string | null;
 
-  @Index()
+  @Index('IDX_scrape_results_target')
   @Column()
   target: string;
 
