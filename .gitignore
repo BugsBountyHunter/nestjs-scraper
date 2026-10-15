@@ -46,8 +46,6 @@ linkedin-cookies.json
 # Fixture-capture / diagnostic output
 /tmp-diag/
 
-# graphify — keep report/graph, ignore cache and machine-local state
-graphify-out/cache/
-graphify-out/manifest.json
-graphify-out/cost.json
-graphify-out/.graphify_*
+# graphify knowledge graph — generated locally, not versioned
+# (rebuild with `/graphify .`, or `graphify update` for code-only changes)
+graphify-out/
