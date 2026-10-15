@@ -6,7 +6,8 @@ services:
     ports:
       - '${PORT:-3000}:3000'
     env_file:
-      - .env
+      - path: .env
+        required: false # CI and fresh clones validate/boot without one
     environment:
       # Override localhost values from .env with in-network service names
       NODE_ENV: production
