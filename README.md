@@ -1,5 +1,7 @@
 # nestjs-scraper
 
+[![CI](https://github.com/BugsBountyHunter/nestjs-scraper/actions/workflows/ci.yml/badge.svg)](https://github.com/BugsBountyHunter/nestjs-scraper/actions/workflows/ci.yml)
+
 > **Legal Notice**: LinkedIn's Terms of Service prohibit unauthorized scraping.
 > This project must only be used for authorized data collection, your own account data, or research.
 > Always comply with applicable laws (GDPR, CFAA) and the target site's `robots.txt`.

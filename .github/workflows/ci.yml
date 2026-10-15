@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # matches the Dockerfile build stage
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # Unit tests mock the browser; skip the ~150MB Chromium download
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test with coverage
+        run: npm run test:cov -- --ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  # Regression test for the SSRF boundary: builds the isolated browser image,
+  # starts it with the egress firewall, and proves private destinations are
+  # rejected while the public internet stays reachable.
+  browser-isolation:
+    name: Browser container egress firewall
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint entrypoint
+        run: shellcheck infra/browser/entrypoint.sh
+
+      - name: Validate compose file
+        run: BROWSER_WS_TOKEN=ci docker compose config -q
+
+      - name: Build browser image
+        run: docker build -t scraper-browser:ci infra/browser
+
+      - name: Start browser container
+        run: |
+          docker run -d --name browser --cap-add NET_ADMIN --shm-size 1g \
+            -e BROWSER_WS_TOKEN="$(openssl rand -hex 24)" scraper-browser:ci
+          for i in $(seq 1 30); do
+            if docker logs browser 2>&1 | grep -q 'browser server listening'; then exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' browser)" != "true" ]; then break; fi
+            sleep 2
+          done
+          echo "Browser container did not become ready"; docker logs browser; exit 1
+
+      - name: Server runs unprivileged
+        run: |
+          docker exec browser sh -c 'P=$(pgrep -f server.js | head -1); grep -E "^(Uid|CapEff)" /proc/$P/status' | tee /tmp/ids
+          grep -Eq '^Uid:\s+1001\b' /tmp/ids
+          grep -Eq '^CapEff:\s+0+$' /tmp/ids
+
+      - name: Private destinations rejected, internet reachable
+        run: |
+          docker exec -u pwuser browser node -e '
+            const net = require("net");
+            const probe = (host, port) => new Promise((resolve) => {
+              const s = net.connect({ host, port, timeout: 5000 });
+              s.on("connect", () => { s.destroy(); resolve("open"); });
+              s.on("error", () => resolve("blocked"));
+              s.on("timeout", () => { s.destroy(); resolve("blocked"); });
+            });
+            const expectations = [
+              ["169.254.169.254", 80, "blocked"],
+              ["10.0.0.1", 80, "blocked"],
+              ["172.17.0.1", 80, "blocked"],
+              ["192.168.1.1", 80, "blocked"],
+              ["127.0.0.1", 3333, "blocked"],
+              ["1.1.1.1", 443, "open"],
+            ];
+            (async () => {
+              let failed = false;
+              for (const [host, port, want] of expectations) {
+                const got = await probe(host, port);
+                console.log(`${host}:${port} -> ${got} (want ${want})`);
+                if (got !== want) failed = true;
+              }
+              process.exit(failed ? 1 : 0);
+            })();
+          '
+
+      - name: Container logs
+        if: always()
+        run: docker logs browser 2>&1 | sed -E 's#/[0-9a-f]{48}#/<redacted>#g'
