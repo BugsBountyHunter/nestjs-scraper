@@ -87,9 +87,27 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "**/*.(t|j)s",
+      "!**/*.spec.ts",
+      "!**/__fixtures__/**",
+      "!main.ts",
+      "!**/*.module.ts"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "coverageThreshold": {
+      "global": {
+        "statements": 50,
+        "branches": 38,
+        "functions": 44,
+        "lines": 50
+      },
+      "./src/scraper/security/": {
+        "statements": 84,
+        "branches": 74,
+        "functions": 85,
+        "lines": 91
+      }
+    }
   }
 }
