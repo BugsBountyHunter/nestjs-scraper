@@ -1,5 +1,6 @@
-import { IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsUrl } from 'class-validator';
+import { IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, ValidateBy } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { isAllowedTargetUrl } from '../../../scraper/security/url-policy';
 
 export enum ScraperTarget {
   LINKEDIN_PROFILE = 'linkedin_profile',
@@ -10,9 +11,17 @@ export enum ScraperTarget {
 export const JOB_PRIORITIES = ['low', 'normal', 'high'] as const;
 export type JobPriority = (typeof JOB_PRIORITIES)[number];
 
-// Only LinkedIn hosts are accepted — the worker drives a real browser to this
-// URL, so an open allow-list would let callers reach internal services (SSRF).
-const ALLOWED_HOSTS = [/^(www\.)?linkedin\.com$/, /^[a-z]{2}\.linkedin\.com$/];
+// The worker drives a real browser to this URL, so only https LinkedIn on the
+// default port is accepted (SSRF). Redirects are enforced separately by the
+// navigation guard — see scraper/security/navigation-guard.ts.
+const IsAllowedTargetUrl = (): PropertyDecorator =>
+  ValidateBy({
+    name: 'isAllowedTargetUrl',
+    validator: {
+      validate: (value: unknown) => typeof value === 'string' && isAllowedTargetUrl(value),
+      defaultMessage: () => 'url must be an https://linkedin.com URL on the default port',
+    },
+  });
 
 export class CreateJobDto {
   @ApiProperty({ enum: ScraperTarget, example: ScraperTarget.LINKEDIN_PROFILE })
@@ -20,11 +29,9 @@ export class CreateJobDto {
   target: ScraperTarget;
 
   @ApiProperty({ example: 'https://www.linkedin.com/in/username/' })
-  @IsUrl(
-    { protocols: ['https'], require_protocol: true, host_whitelist: ALLOWED_HOSTS },
-    { message: 'url must be an https://linkedin.com URL' },
-  )
+  @IsString()
   @IsNotEmpty()
+  @IsAllowedTargetUrl()
   url: string;
 
   @ApiPropertyOptional({ enum: JOB_PRIORITIES, example: 'high' })

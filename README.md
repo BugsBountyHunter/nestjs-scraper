@@ -188,7 +188,7 @@ Bypass Akamai Bot Manager and DataDome detection layers.
 - CAPTCHA solver integration (`CaptchaService`)
 - Target: < 5% block rate per session
 
-> Job URLs must be `https://` LinkedIn URLs — other hosts are rejected to prevent SSRF via the headless browser.
+> Job URLs must be `https://` LinkedIn URLs on the default port — other hosts are rejected to prevent SSRF via the headless browser. At runtime a navigation guard also aborts any redirect that leaves LinkedIn and any request to loopback/private/link-local/docker-internal hosts; such jobs fail immediately without retries.
 
 ### Phase 4 — LinkedIn Parsers _(in progress)_
 

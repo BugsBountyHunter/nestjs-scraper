@@ -22,8 +22,14 @@ describe('CreateJobDto', () => {
     'https://169.254.169.254/latest/meta-data',
     'https://localhost:3000/health',
     'www.linkedin.com/in/x',
+    'https://www.linkedin.com:22/',
+    'https://www.linkedin.com@evil.com/',
   ])('rejects non-LinkedIn or non-https URL %s', async (url) => {
     expect(await errorsFor({ ...valid, url })).toContain('url');
+  });
+
+  it('accepts upper-case LinkedIn hosts', async () => {
+    expect(await errorsFor({ ...valid, url: 'https://WWW.LINKEDIN.COM/in/x' })).toEqual([]);
   });
 
   it('rejects unknown targets and priorities', async () => {

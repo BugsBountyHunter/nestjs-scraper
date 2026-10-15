@@ -2,6 +2,7 @@ import { OrchestratorService } from './orchestrator.service';
 import { ScraperTarget } from '../../api/jobs/dto/create-job.dto';
 import { MetricsService } from '../../monitoring/metrics.service';
 import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
+import { NavigationBlockedError } from '../security/navigation-guard';
 
 const URL = 'https://www.linkedin.com/in/someone/';
 
@@ -13,6 +14,8 @@ function makePage(overrides: Partial<Record<string, jest.Mock>> = {}) {
     title: jest.fn().mockResolvedValue('Someone | LinkedIn'),
     content: jest.fn().mockResolvedValue('<html></html>'),
     close: jest.fn().mockResolvedValue(undefined),
+    route: jest.fn().mockResolvedValue(undefined),
+    mainFrame: jest.fn().mockReturnValue({}),
     ...overrides,
   };
 }
@@ -132,5 +135,36 @@ describe('OrchestratorService', () => {
 
     await expect(service.run(job)).rejects.toThrow(/Circuit open/);
     expect(deps.browserPool.acquire).not.toHaveBeenCalled();
+  });
+
+  it('aborts without retrying when a redirect leaves LinkedIn (SSRF guard)', async () => {
+    type RouteHandler = (route: unknown, request: unknown) => unknown;
+    let handler: RouteHandler | undefined;
+    const mainFrame = {};
+    const page = makePage({
+      mainFrame: jest.fn().mockReturnValue(mainFrame),
+      route: jest.fn(async (_p: string, h: RouteHandler) => {
+        handler = h;
+      }),
+      // Simulate LinkedIn's open redirect bouncing to the metadata service
+      goto: jest.fn(async () => {
+        await handler!(
+          { abort: jest.fn(), continue: jest.fn() },
+          {
+            url: () => 'http://169.254.169.254/latest/meta-data',
+            isNavigationRequest: () => true,
+            frame: () => mainFrame,
+          },
+        );
+        throw new Error('net::ERR_BLOCKED_BY_CLIENT');
+      }),
+    });
+    const { service, deps, context } = setup(page);
+
+    await expect(service.run(job)).rejects.toBeInstanceOf(NavigationBlockedError);
+    expect(deps.browserPool.acquire).toHaveBeenCalledTimes(1);
+    expect(deps.browserPool.release).toHaveBeenCalledWith(context);
+    expect(deps.storage.save).not.toHaveBeenCalled();
+    expect(deps.circuitBreaker.getStats()).toEqual({});
   });
 });

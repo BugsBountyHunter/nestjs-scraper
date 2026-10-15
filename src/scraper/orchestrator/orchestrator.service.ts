@@ -13,27 +13,15 @@ import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.servic
 import { UrlCacheService } from '../cache/url-cache.service';
 import { MetricsService } from '../../monitoring/metrics.service';
 import { LinkedInSessionService } from '../session/linkedin-session.service';
+import { installNavigationGuard, NavigationBlockedError } from '../security/navigation-guard';
 import { ScrapeJobData } from './orchestrator.processor';
 import { ScraperTarget } from '../../api/jobs/dto/create-job.dto';
 
 const MAX_RETRIES = 3;
 
-const BLOCK_URL_PATTERNS = [
-  '/checkpoint/',
-  '/login',
-  '/authwall',
-  '/challenge',
-  '/uas/login',
-];
+const BLOCK_URL_PATTERNS = ['/checkpoint/', '/login', '/authwall', '/challenge', '/uas/login'];
 
-const BLOCK_TITLE_PATTERNS = [
-  'security check',
-  'verify you are human',
-  'access denied',
-  'blocked',
-  '403',
-  '429',
-];
+const BLOCK_TITLE_PATTERNS = ['security check', 'verify you are human', 'access denied', 'blocked', '403', '429'];
 
 @Injectable()
 export class OrchestratorService {
@@ -93,6 +81,14 @@ export class OrchestratorService {
         return result;
       } catch (err) {
         lastError = err;
+        if (err instanceof NavigationBlockedError) {
+          // Policy violation, not a transient failure — don't retry or trip the breaker.
+          this.logger.error(`SSRF guard: ${err.message} (job url ${jobData.url})`);
+          this.browserPool.release(context);
+          this.metrics.jobsTotal.inc({ target: jobData.target, status: 'blocked_by_policy' });
+          throw err;
+        }
+
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(`Attempt ${attempt + 1}/${MAX_RETRIES} failed: ${msg}`);
 
@@ -124,7 +120,12 @@ export class OrchestratorService {
   ): Promise<unknown> {
     this.logger.log(`[attempt ${attempt + 1}] Navigating to ${jobData.url}`);
 
-    const response = await page.goto(jobData.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const guard = await installNavigationGuard(page);
+    const response = await page.goto(jobData.url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch((err) => {
+      guard.assertNotBlocked(); // surface a policy block instead of a generic net::ERR
+      throw err;
+    });
+    guard.assertNotBlocked();
 
     const httpStatus = response?.status() ?? 0;
     if (httpStatus === 429 || httpStatus === 403) {
@@ -133,6 +134,7 @@ export class OrchestratorService {
 
     // Wait for client-side redirects (e.g. LinkedIn SPA auth-wall) to settle
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => undefined);
+    guard.assertNotBlocked(); // catches late client-side redirects
 
     await this.checkAndHandleBlock(page, proxy);
     await this.checkAndSolveCaptcha(page);
@@ -194,7 +196,9 @@ export class OrchestratorService {
     if (!result.solved) return;
 
     await page.evaluate((token: string) => {
-      const ta = document.querySelector<HTMLTextAreaElement>('[name="g-recaptcha-response"], [name="h-captcha-response"]');
+      const ta = document.querySelector<HTMLTextAreaElement>(
+        '[name="g-recaptcha-response"], [name="h-captcha-response"]',
+      );
       if (ta) {
         ta.value = token;
         ta.dispatchEvent(new Event('change', { bubbles: true }));
