@@ -188,7 +188,11 @@ Bypass Akamai Bot Manager and DataDome detection layers.
 - CAPTCHA solver integration (`CaptchaService`)
 - Target: < 5% block rate per session
 
-> Job URLs must be `https://` LinkedIn URLs on the default port — other hosts are rejected to prevent SSRF via the headless browser. At runtime a navigation guard also aborts any redirect that leaves LinkedIn and any request to loopback/private/link-local/docker-internal hosts; such jobs fail immediately without retries.
+> **SSRF protection** — the worker drives a real browser, so:
+> 1. Job URLs must be `https://` LinkedIn URLs on the default port (validated at submit time).
+> 2. An in-app navigation guard (`src/scraper/security/`) aborts client-side (JavaScript) navigations that leave LinkedIn, popups, and any request whose host is or resolves to a loopback/private/link-local/docker-internal address. Blocked jobs fail without retries.
+>
+> **Limits of the in-app guard:** Playwright request interception does not see HTTP 3xx redirect hops, and its DNS check is separate from the browser's own lookup (DNS rebinding). It is defence in depth, not a boundary — the network-level isolation described below is what actually prevents SSRF.
 
 ### Phase 4 — LinkedIn Parsers _(in progress)_
 
