@@ -25,7 +25,8 @@
     "smoke:phase3:headful": "HEADLESS=false ts-node -P tsconfig.json scripts/smoke-test-phase3.ts",
     "smoke:phase3:offline": "SKIP_NETWORK=true ts-node -P tsconfig.json scripts/smoke-test-phase3.ts",
     "capture:fixtures": "ts-node -P tsconfig.json scripts/capture-fixtures.ts",
-    "capture:fixtures:headful": "HEADLESS=false ts-node -P tsconfig.json scripts/capture-fixtures.ts"
+    "capture:fixtures:headful": "HEADLESS=false ts-node -P tsconfig.json scripts/capture-fixtures.ts",
+    "fixtures:anonymize": "ts-node -P tsconfig.json scripts/anonymize-fixtures.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^10.2.3",

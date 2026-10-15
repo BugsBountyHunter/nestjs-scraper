@@ -14,8 +14,8 @@ describe('LinkedInProfileParser', () => {
   });
 
   it('parses name', () => {
-    const result = parser.parse(html, 'https://linkedin.com/in/ahmed-saber-1b549ab4');
-    expect(result.name).toBe('Ahmed Saber');
+    const result = parser.parse(html, 'https://linkedin.com/in/jane-doe');
+    expect(result.name).toBe('Jane Doe');
   });
 
   it('parses headline', () => {
@@ -25,7 +25,7 @@ describe('LinkedInProfileParser', () => {
 
   it('parses location', () => {
     const result = parser.parse(html, 'https://linkedin.com/in/test');
-    expect(result.location).toBe('Cairo, Egypt');
+    expect(result.location).toBe('Springfield, Exampleland');
   });
 
   it('parses about section', () => {
@@ -49,7 +49,7 @@ describe('LinkedInProfileParser', () => {
     const result = parser.parse(html, 'https://linkedin.com/in/test');
     const edu = result.education as Array<{ school: string; degree: string; years: string }>;
     expect(edu.length).toBe(1);
-    expect(edu[0].school).toBe('Cairo University');
+    expect(edu[0].school).toBe('Example State University');
     expect(edu[0].degree).toContain('Computer Science');
     expect(edu[0].years).toBe('2014 - 2018');
   });
