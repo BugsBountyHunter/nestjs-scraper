@@ -14,11 +14,32 @@ services:
       DB_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Drive the network-isolated browser container instead of a local Chromium
+      BROWSER_WS_ENDPOINT: ws://browser:3333/${BROWSER_WS_TOKEN:-}
+    networks: [backend, browser]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      browser:
+        condition: service_started
+    restart: unless-stopped
+
+  # SSRF boundary: Chromium runs here, on a network without postgres/redis,
+  # behind an egress firewall that rejects all private/reserved destinations
+  # (see infra/browser/entrypoint.sh). Not published to the host.
+  browser:
+    build:
+      context: infra/browser
+    environment:
+      BROWSER_WS_TOKEN: ${BROWSER_WS_TOKEN:-}
+      PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
+      # Space-separated CIDRs to exempt, e.g. a proxy gateway on a private IP
+      EGRESS_ALLOW_CIDRS: ${EGRESS_ALLOW_CIDRS:-}
+    cap_add: [NET_ADMIN] # only used by entrypoint before dropping to pwuser
+    shm_size: 1gb
+    networks: [browser]
     restart: unless-stopped
 
   postgres:
@@ -31,6 +52,7 @@ services:
       - '${DB_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER}']
       interval: 10s
@@ -49,6 +71,7 @@ services:
       - '${REDIS_PORT:-6379}:6379'
     volumes:
       - redis_data:/data
+    networks: [backend]
     healthcheck:
       test: ['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
       interval: 10s
@@ -62,6 +85,7 @@ services:
     profiles: [monitoring]
     volumes:
       - ./infra/prometheus:/etc/prometheus:ro
+    networks: [backend]
     ports:
       - '9090:9090'
     restart: unless-stopped
@@ -74,11 +98,16 @@ services:
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [backend]
     ports:
       - '3001:3000'
     depends_on:
       - prometheus
     restart: unless-stopped
+
+networks:
+  backend:
+  browser:
 
 volumes:
   postgres_data:

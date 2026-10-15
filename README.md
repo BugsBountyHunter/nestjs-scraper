@@ -193,6 +193,14 @@ Bypass Akamai Bot Manager and DataDome detection layers.
 > 2. An in-app navigation guard (`src/scraper/security/`) aborts client-side (JavaScript) navigations that leave LinkedIn, popups, and any request whose host is or resolves to a loopback/private/link-local/docker-internal address. Blocked jobs fail without retries.
 >
 > **Limits of the in-app guard:** Playwright request interception does not see HTTP 3xx redirect hops, and its DNS check is separate from the browser's own lookup (DNS rebinding). It is defence in depth, not a boundary — the network-level isolation described below is what actually prevents SSRF.
+>
+> **Network isolation (the real boundary).** Under `docker compose`, Chromium runs in its own `browser` container and the app drives it over a token-protected websocket (`BROWSER_WS_ENDPOINT`). That container:
+> - sits on a separate network with no route to postgres/redis;
+> - runs an iptables egress firewall (`infra/browser/entrypoint.sh`) that rejects every private/loopback/link-local/reserved destination, checked by the kernel per connection after DNS resolution, so 3xx redirects and DNS rebinding are covered;
+> - drops root and all capabilities before starting the browser.
+>
+> Set `BROWSER_WS_TOKEN` in `.env` (`openssl rand -hex 24`). Running locally without `BROWSER_WS_ENDPOINT` launches Chromium in-process with **no** isolation (dev only).
+> Trade-off: remote mode uses a regular (non-persistent) browser context, so the persistent-profile "Incognito Window" mitigation from Phase 2 only applies to local mode.
 
 ### Phase 4 — LinkedIn Parsers _(in progress)_
 

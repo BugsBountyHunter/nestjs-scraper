@@ -1,10 +1,10 @@
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { chromium } from 'playwright-extra';
-import type { BrowserContext } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions } from 'playwright';
 import { BrowserProfile, FingerprintService } from '../anti-detection/fingerprint/fingerprint.service';
 import { ProxyConfig } from '../proxy/proxy-rotator.service';
 
@@ -17,11 +17,34 @@ const stealth = StealthPlugin();
 stealth.enabledEvasions.delete('user-agent-override');
 chromium.use(stealth);
 
+// Chromium flags for local launches. In remote mode the same flags are set by
+// the browser container (infra/browser/server.js) — keep the two in sync.
+const CHROMIUM_ARGS = [
+  '--disable-blink-features=AutomationControlled',
+  '--disable-features=IsolateOrigins,site-per-process',
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+];
+
+export interface CreatedContext {
+  context: BrowserContext;
+  profile: BrowserProfile;
+  /** Local persistent-profile dir; '' in remote mode (nothing to clean up). */
+  userDataDir: string;
+}
+
 @Injectable()
-export class BrowserFactoryService implements OnModuleInit {
+export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BrowserFactoryService.name);
   private readonly headless: boolean;
   private readonly timeout: number;
+  /**
+   * When set, contexts are created on a remote Playwright server running in
+   * the network-isolated browser container (SSRF boundary) instead of a
+   * Chromium launched inside this process's network namespace.
+   */
+  private readonly wsEndpoint: string;
+  private remoteBrowser: Promise<Browser> | null = null;
 
   constructor(
     private readonly config: ConfigService,
@@ -29,25 +52,72 @@ export class BrowserFactoryService implements OnModuleInit {
   ) {
     this.headless = config.get('PLAYWRIGHT_HEADLESS', 'true') === 'true';
     this.timeout = Number(config.get('PLAYWRIGHT_TIMEOUT', '30000'));
+    this.wsEndpoint = config.get<string>('BROWSER_WS_ENDPOINT', '');
+    if (this.wsEndpoint && !/^wss?:\/\//.test(this.wsEndpoint)) {
+      throw new Error('BROWSER_WS_ENDPOINT must be a ws:// or wss:// URL');
+    }
   }
 
   onModuleInit(): void {
-    this.logger.log(`Browser factory ready — headless: ${this.headless}`);
+    const mode = this.wsEndpoint ? 'remote (isolated browser container)' : `local — headless: ${this.headless}`;
+    this.logger.log(`Browser factory ready — ${mode}`);
+    if (!this.wsEndpoint && process.env.NODE_ENV === 'production') {
+      this.logger.warn('BROWSER_WS_ENDPOINT not set — browser shares the app network (no SSRF isolation)');
+    }
   }
 
-  async createContext(proxy: ProxyConfig | null): Promise<{ context: BrowserContext; profile: BrowserProfile; userDataDir: string }> {
-    const profile = this.fingerprintService.generateProfile();
-    const userDataDir = path.join(os.tmpdir(), `pw-profile-${crypto.randomBytes(8).toString('hex')}`);
+  async onModuleDestroy(): Promise<void> {
+    if (!this.remoteBrowser) return;
+    const browser = await this.remoteBrowser.catch(() => null);
+    await browser?.close().catch(() => undefined);
+  }
 
-    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+  async createContext(proxy: ProxyConfig | null): Promise<CreatedContext> {
+    const profile = this.fingerprintService.generateProfile();
+    const contextOptions = this.buildContextOptions(profile, proxy);
+
+    const { context, userDataDir } = this.wsEndpoint
+      ? { context: await (await this.getRemoteBrowser()).newContext(contextOptions), userDataDir: '' }
+      : await this.launchLocal(profile, contextOptions);
+
+    await this.applyStealthPatches(context, profile);
+    return { context, profile, userDataDir };
+  }
+
+  private async launchLocal(
+    profile: BrowserProfile,
+    contextOptions: BrowserContextOptions,
+  ): Promise<{ context: BrowserContext; userDataDir: string }> {
+    // Persistent context avoids the "Incognito Window" storage-quota signal.
+    const userDataDir = path.join(os.tmpdir(), `pw-profile-${crypto.randomBytes(8).toString('hex')}`);
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      ...contextOptions,
       headless: this.headless,
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        `--window-size=${profile.viewport.width},${profile.viewport.height}`,
-      ],
+      args: [...CHROMIUM_ARGS, `--window-size=${profile.viewport.width},${profile.viewport.height}`],
+    });
+    return { context, userDataDir };
+  }
+
+  /** One shared connection; re-established if the browser container restarts. */
+  private getRemoteBrowser(): Promise<Browser> {
+    if (!this.remoteBrowser) {
+      const connecting = chromium.connect(this.wsEndpoint, { timeout: this.timeout }).then((browser) => {
+        browser.on('disconnected', () => {
+          this.logger.warn('Remote browser disconnected — will reconnect on next context');
+          if (this.remoteBrowser === connecting) this.remoteBrowser = null;
+        });
+        return browser;
+      });
+      connecting.catch(() => {
+        if (this.remoteBrowser === connecting) this.remoteBrowser = null;
+      });
+      this.remoteBrowser = connecting;
+    }
+    return this.remoteBrowser;
+  }
+
+  private buildContextOptions(profile: BrowserProfile, proxy: ProxyConfig | null): BrowserContextOptions {
+    return {
       userAgent: profile.userAgent,
       viewport: profile.viewport,
       locale: profile.locale,
@@ -62,17 +132,11 @@ export class BrowserFactoryService implements OnModuleInit {
         'sec-ch-ua-platform': `"${profile.platform}"`,
         'sec-ch-ua-mobile': '?0',
       },
+      ...(proxy ? { proxy: { server: proxy.url, username: proxy.user, password: proxy.pass } } : {}),
     };
+  }
 
-    if (proxy) {
-      launchOptions.proxy = {
-        server: proxy.url,
-        username: proxy.user,
-        password: proxy.pass,
-      };
-    }
-
-    const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+  private async applyStealthPatches(context: BrowserContext, profile: BrowserProfile): Promise<void> {
     context.setDefaultTimeout(this.timeout);
 
     // Override navigator.userAgentData so Client Hints (brands, platform, version)
@@ -233,6 +297,5 @@ export class BrowserFactoryService implements OnModuleInit {
       }
     });
 
-    return { context, profile, userDataDir };
   }
 }
