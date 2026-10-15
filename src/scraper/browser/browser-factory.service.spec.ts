@@ -87,6 +87,18 @@ describe('BrowserFactoryService', () => {
       await expect(factory.createContext(null)).resolves.toBeDefined();
     });
 
+    it('never leaks the ws token in connect errors', async () => {
+      mockedChromium.connect.mockRejectedValue(
+        new Error('browserType.connect: connect ECONNREFUSED ws://browser:3333/secret-token'),
+      );
+      const factory = makeFactory(env);
+
+      const err = await factory.createContext(null).catch((e: Error) => e);
+
+      expect((err as Error).message).not.toContain('secret-token');
+      expect((err as Error).message).toContain('<redacted>');
+    });
+
     it('rejects a non-websocket endpoint at startup', () => {
       expect(() => makeFactory({ BROWSER_WS_ENDPOINT: 'http://browser:3333' })).toThrow(/ws:\/\//);
     });

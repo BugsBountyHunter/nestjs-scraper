@@ -35,8 +35,8 @@ services:
     environment:
       BROWSER_WS_TOKEN: ${BROWSER_WS_TOKEN:-}
       PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
-      # Space-separated CIDRs to exempt, e.g. a proxy gateway on a private IP
-      EGRESS_ALLOW_CIDRS: ${EGRESS_ALLOW_CIDRS:-}
+      # Space-separated IPv4:port exemptions, e.g. a proxy gateway on a private IP
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-}
     cap_add: [NET_ADMIN] # only used by entrypoint before dropping to pwuser
     shm_size: 1gb
     networks: [browser]

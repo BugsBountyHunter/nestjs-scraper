@@ -26,6 +26,19 @@ const CHROMIUM_ARGS = [
   '--disable-setuid-sandbox',
 ];
 
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Removes the ws path (the auth token) from any text that may contain the endpoint. */
+export function redactWsToken(text: string, endpoint: string): string {
+  let token = '';
+  try {
+    token = new URL(endpoint).pathname.replace(/^\//, '');
+  } catch {
+    return text;
+  }
+  return token ? text.split(token).join('<redacted>') : text;
+}
+
 export interface CreatedContext {
   context: BrowserContext;
   profile: BrowserProfile;
@@ -59,7 +72,9 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const mode = this.wsEndpoint ? 'remote (isolated browser container)' : `local — headless: ${this.headless}`;
+    const mode = this.wsEndpoint
+      ? `remote (isolated browser container at ${redactWsToken(this.wsEndpoint, this.wsEndpoint)})`
+      : `local — headless: ${this.headless}`;
     this.logger.log(`Browser factory ready — ${mode}`);
     if (!this.wsEndpoint && process.env.NODE_ENV === 'production') {
       this.logger.warn('BROWSER_WS_ENDPOINT not set — browser shares the app network (no SSRF isolation)');
@@ -101,13 +116,20 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
   /** One shared connection; re-established if the browser container restarts. */
   private getRemoteBrowser(): Promise<Browser> {
     if (!this.remoteBrowser) {
-      const connecting = chromium.connect(this.wsEndpoint, { timeout: this.timeout }).then((browser) => {
-        browser.on('disconnected', () => {
-          this.logger.warn('Remote browser disconnected — will reconnect on next context');
-          if (this.remoteBrowser === connecting) this.remoteBrowser = null;
+      const connecting = chromium
+        .connect(this.wsEndpoint, { timeout: this.timeout })
+        .catch((err: unknown) => {
+          // Playwright echoes the ws URL (incl. the secret path token) in its errors,
+          // which would otherwise land in logs, job failedReason and Prometheus-adjacent tooling.
+          throw new Error(`Remote browser connect failed: ${redactWsToken(errorMessage(err), this.wsEndpoint)}`);
+        })
+        .then((browser) => {
+          browser.on('disconnected', () => {
+            this.logger.warn('Remote browser disconnected — will reconnect on next context');
+            if (this.remoteBrowser === connecting) this.remoteBrowser = null;
+          });
+          return browser;
         });
-        return browser;
-      });
       connecting.catch(() => {
         if (this.remoteBrowser === connecting) this.remoteBrowser = null;
       });
@@ -143,7 +165,11 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
     // match the spoofed UA.  We use a getter — not a value — so it survives any prior
     // Object.defineProperty calls that set writable:false on the property.
     const chromeMajor = this.fingerprintService.extractChromeMajor(profile.userAgent);
-    const uaPlatform = profile.platform.startsWith('Win') ? 'Windows' : profile.platform === 'MacIntel' ? 'macOS' : 'Linux';
+    const uaPlatform = profile.platform.startsWith('Win')
+      ? 'Windows'
+      : profile.platform === 'MacIntel'
+        ? 'macOS'
+        : 'Linux';
     await context.addInitScript(
       (args: { version: number; platform: string }) => {
         const { version, platform } = args;
@@ -180,9 +206,16 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
           });
         } catch {
           // Property non-configurable — patch the existing object in place
-          const existing = (navigator as unknown as Record<string, unknown>).userAgentData as Record<string, unknown> | null;
+          const existing = (navigator as unknown as Record<string, unknown>).userAgentData as Record<
+            string,
+            unknown
+          > | null;
           if (existing) {
-            try { Object.assign(existing, uad); } catch { /* best-effort */ }
+            try {
+              Object.assign(existing, uad);
+            } catch {
+              /* best-effort */
+            }
           }
         }
       },
@@ -200,14 +233,18 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
 
       try {
         Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + CHROME_H, configurable: true });
-        Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth,              configurable: true });
-      } catch { /* already immutable */ }
+        Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth, configurable: true });
+      } catch {
+        /* already immutable */
+      }
 
       try {
         const h = window.screen.height;
         Object.defineProperty(window.screen, 'availHeight', { get: () => h - MENU_BAR, configurable: true });
-        Object.defineProperty(window.screen, 'availTop',    { get: () => MENU_BAR,      configurable: true });
-      } catch { /* already immutable */ }
+        Object.defineProperty(window.screen, 'availTop', { get: () => MENU_BAR, configurable: true });
+      } catch {
+        /* already immutable */
+      }
 
       if (typeof navigator.storage?.persist === 'function') {
         try {
@@ -216,7 +253,9 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
             writable: false,
             configurable: true,
           });
-        } catch { /* already immutable */ }
+        } catch {
+          /* already immutable */
+        }
       }
     });
 
@@ -243,9 +282,14 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
       // ── 1. readPixels patch ──────────────────────────────────────────────
       const _origReadPixels = WebGLRenderingContext.prototype.readPixels;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (WebGLRenderingContext.prototype as any).readPixels = function(
-        x: number, y: number, width: number, height: number,
-        format: number, type: number, pixels: Uint8Array | null,
+      (WebGLRenderingContext.prototype as any).readPixels = function (
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        format: number,
+        type: number,
+        pixels: Uint8Array | null,
       ) {
         if (width === 256 && height === 24 && pixels instanceof Uint8Array) {
           // Analytically-correct red rectangle on transparent canvas:
@@ -255,7 +299,7 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
           for (let row = 3; row < 21; row++) {
             for (let col = 32; col < 224; col++) {
               const idx = (row * 256 + col) * 4;
-              pixels[idx] = 255;     // R
+              pixels[idx] = 255; // R
               pixels[idx + 3] = 255; // A
             }
           }
@@ -286,7 +330,7 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
             if (d && typeof d === 'object' && d.value && d.value.offcanvas) {
               // Replace real SwiftShader strings with the spoofed Intel values so
               // checkWebworkerValues() comparison (worker == main-thread) passes.
-              d.value.offcanvas.unmasked_vender   = 'Intel Inc.';
+              d.value.offcanvas.unmasked_vender = 'Intel Inc.';
               d.value.offcanvas.unmasked_renderer = 'Intel Iris OpenGL Engine';
             }
             _msgCache.set(this, d);
@@ -296,6 +340,5 @@ export class BrowserFactoryService implements OnModuleInit, OnModuleDestroy {
         });
       }
     });
-
   }
 }
