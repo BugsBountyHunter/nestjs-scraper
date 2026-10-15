@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsUrl } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum ScraperTarget {
@@ -7,22 +7,33 @@ export enum ScraperTarget {
   LINKEDIN_COMPANY = 'linkedin_company',
 }
 
+export const JOB_PRIORITIES = ['low', 'normal', 'high'] as const;
+export type JobPriority = (typeof JOB_PRIORITIES)[number];
+
+// Only LinkedIn hosts are accepted — the worker drives a real browser to this
+// URL, so an open allow-list would let callers reach internal services (SSRF).
+const ALLOWED_HOSTS = [/^(www\.)?linkedin\.com$/, /^[a-z]{2}\.linkedin\.com$/];
+
 export class CreateJobDto {
   @ApiProperty({ enum: ScraperTarget, example: ScraperTarget.LINKEDIN_PROFILE })
   @IsEnum(ScraperTarget)
   target: ScraperTarget;
 
   @ApiProperty({ example: 'https://www.linkedin.com/in/username/' })
-  @IsUrl()
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true, host_whitelist: ALLOWED_HOSTS },
+    { message: 'url must be an https://linkedin.com URL' },
+  )
   @IsNotEmpty()
   url: string;
 
-  @ApiPropertyOptional({ example: 'high', description: 'Job priority: low | normal | high' })
+  @ApiPropertyOptional({ enum: JOB_PRIORITIES, example: 'high' })
   @IsOptional()
-  @IsString()
-  priority?: 'low' | 'normal' | 'high';
+  @IsIn(JOB_PRIORITIES)
+  priority?: JobPriority;
 
   @ApiPropertyOptional({ description: 'Additional metadata to attach to the job' })
   @IsOptional()
+  @IsObject()
   metadata?: Record<string, unknown>;
 }

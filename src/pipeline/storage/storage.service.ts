@@ -9,6 +9,7 @@ export interface SaveResultInput {
   url: string;
   data: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  status?: ScrapeResult['status'];
 }
 
 @Injectable()
@@ -20,12 +21,12 @@ export class StorageService {
 
   async save(input: SaveResultInput): Promise<ScrapeResult> {
     const entity = this.repo.create({
-      jobId: input.jobId ?? '',
+      jobId: input.jobId ?? null,
       target: input.target,
       url: input.url,
       data: input.data,
       metadata: input.metadata ?? {},
-      status: 'success',
+      status: input.status ?? 'success',
     });
     return this.repo.save(entity);
   }

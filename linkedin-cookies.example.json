@@ -1,0 +1,20 @@
+[
+  {
+    "name": "li_at",
+    "value": "AQEDAAA...",
+    "domain": ".linkedin.com",
+    "path": "/",
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "JSESSIONID",
+    "value": "ajax:...",
+    "domain": ".linkedin.com",
+    "path": "/",
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  }
+]

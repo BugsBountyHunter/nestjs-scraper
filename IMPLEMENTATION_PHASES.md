@@ -25,8 +25,11 @@ nestjs-scraper/
 │   │   ├── normalizers/        # Data cleaning & normalization
 │   │   └── storage/            # PostgreSQL persistence
 │   ├── queue/                  # BullMQ global queue registration
-│   └── monitoring/             # Health checks (Terminus)
-├── docker-compose.yml          # PostgreSQL + Redis
+│   └── monitoring/             # Health checks (Terminus) + Prometheus /metrics
+├── infra/                      # Prometheus alerts + Grafana dashboards/provisioning
+├── scripts/                    # Smoke tests, fixture capture, diagnostics/
+├── Dockerfile                  # Multi-stage build on Playwright image
+├── docker-compose.yml          # App + PostgreSQL + Redis (+ monitoring profile)
 ├── .env.example                # All environment variables documented
 └── IMPLEMENTATION_PHASES.md    # This file
 ```
@@ -52,8 +55,6 @@ nestjs-scraper/
 
 ### Setup Commands
 ```bash
-cd /Users/ahmedsr/Documents/works/playground/nestjs-scraper
-
 # Copy environment file
 cp .env.example .env
 
@@ -71,7 +72,7 @@ npm run start:dev
 
 ---
 
-## Phase 2 — Browser Layer
+## Phase 2 — Browser Layer 🔄 (10/12 — In Progress)
 
 **Goal**: Working Playwright-extra + stealth setup with browser pool.
 
@@ -86,14 +87,43 @@ npm run start:dev
   - Offline fingerprint diversity check (always runs, no network needed)
 - [x] Validate fingerprint randomization across 10 profiles (unit test + offline smoke check)
 - [x] `BrowserPoolService` acquire/release/destroy cycle verified (15 unit tests, all passing)
-- [x] Run live smoke test: **10/12 checks pass**
-  - bot.sannysoft.com: 7/7 ✅ (webdriver, advanced-webdriver, chrome-obj, permissions, plugins, languages)
-  - pixelscan.net bot-check: PASS — "No automated behavior detected"
-  - pixelscan.net fingerprint-masking: FAIL — canvas override detected (Phase 3 concern)
-  - pixelscan.net fingerprint-consistency: FAIL — caused by canvas masking above (Phase 3 concern)
 - [x] Updated user agents to Chrome/135-136 to match installed Playwright Chromium (avoids version mismatch)
 - [x] Added `navigator.userAgentData` init script in `BrowserFactoryService` to align Client Hints with spoofed UA
-- [ ] Tune `PLAYWRIGHT_TIMEOUT` and headless settings in `.env`
+- [x] Switched `BrowserFactoryService` to `launchPersistentContext` — fixes "(Incognito Window)" flag (real storage quota ~297 GB vs ephemeral ~1.3 GB)
+- [x] Added outerHeight / screen.availHeight / storage.persist() patches to mask headless window signals
+- [x] Added `readPixels` override on 256×24 canvas — makes `getFixedRedBoxHash()` SHA-256 match expected value
+- [x] Added `MessageEvent.prototype.data` interception — makes `checkWebworkerValues()` comparison pass (worker SwiftShader → spoofed Intel strings)
+- [x] Tune `PLAYWRIGHT_TIMEOUT` and headless settings in `.env`
+- [ ] **Fix pixelscan fingerprint-masking** — `jsModifyDetected = true` still set _(root cause identified, see below)_
+- [ ] Run live smoke test: **10/12 checks pass** (2 remaining: masking + consistency)
+  - bot.sannysoft.com: 7/7 ✅ (webdriver, advanced-webdriver, chrome-obj, permissions, plugins, languages)
+  - pixelscan.net bot-check: ✅ "No automated behavior detected"
+  - pixelscan.net fingerprint-masking: ❌ `jsModifyDetected = true`
+  - pixelscan.net fingerprint-consistency: ❌ (depends on masking fix)
+
+### Stealth patches in `BrowserFactoryService` (addInitScript chain)
+| Script | What it fixes |
+|--------|---------------|
+| `navigator.userAgentData` override | Client Hints brand/platform match spoofed UA |
+| outerHeight / availHeight / storage.persist | Headless "Incognito Window" signals |
+| `readPixels` on 256×24 canvas | `getFixedRedBoxHash()` SHA-256 mismatch |
+| `MessageEvent.prototype.data` | `checkWebworkerValues()` SwiftShader/Intel mismatch ✅ |
+
+### Root cause: `jsModifyDetected = true` (unresolved)
+
+pixelscan's `checkFingerprintMasking()` compares `selfFpCollect` (generated in main page via `w.Z.generateFingerprint()`) against `frameFpCollect` (generated in an iframe and posted via `{messageSource:'fpCollect', value:fingerprint}`). If any key differs, `jsModifyDetected = true`.
+
+**Identified via diagnostic script (`scripts/diagnostics/ps-diag4.ts`)**:
+
+- fptc's `canvasHash` function → **throws** `TypeError: top.MD5 is not a function`
+- fptc's `webglHash` function → **throws** `TypeError: top.MD5 is not a function`
+- All other 11 fptc functions pass
+
+pixelscan loads its MD5 library as a module that doesn't expose `window.MD5` globally. fptc's `canvasHash` and `webglHash` call `top.MD5(...)` — this throws in the Playwright context because the library hasn't been attached to `window` when fptc runs in the iframe.
+
+**Result**: `frameFpCollect` is missing `canvasHash` and `webglHash` keys → mismatch with `selfFpCollect` → `jsModifyDetected = true` → masking check fails.
+
+**Proposed fix**: Inject a minimal MD5 implementation as `window.MD5` via `addInitScript` before pixelscan's scripts run. This would make fptc's hash functions succeed in both contexts.
 
 ### Running the Smoke Test
 ```bash
@@ -114,20 +144,43 @@ SKIP_NETWORK=true npm run smoke:stealth
 
 ---
 
-## Phase 3 — Anti-Detection Hardening
+## Phase 3 — Anti-Detection Hardening 🔄 (In Progress)
 
 **Goal**: Pass LinkedIn's Akamai Bot Manager and DataDome detection layers.
 
 ### Tasks
-- [ ] Configure residential proxy provider (Bright Data / Oxylabs / Smartproxy)
+- [x] Configure residential proxy provider support (Bright Data / Oxylabs / Smartproxy)
   - Set `PROXY_POOL` in `.env` with comma-separated `user:pass@host:port` entries
-- [ ] Test proxy rotation — confirm each job gets a different IP
-- [ ] Validate `HumanSimulatorService`:
-  - Random delay between page actions (2–8 seconds)
-  - Gradual scroll simulation
-  - Bezier-curve mouse movement to elements
-- [ ] Integrate `CaptchaService` — configure `CAPTCHA_API_KEY` + `CAPTCHA_PROVIDER`
-- [ ] Test full anti-detection stack against LinkedIn (guest pages first)
+- [x] Proxy health-aware rotation — `markBanned()` disables a proxy for 30 min after 3 failures; `markSuccess()` resets fail count; `getStats()` for observability
+- [x] Enhanced `HumanSimulatorService`:
+  - Random delay between page actions (2–8 seconds, config-driven)
+  - Gradual scroll with organic mid-scroll reading pauses (15% chance long pause, 20% short)
+  - True cubic Bézier curve mouse movement between any two points with micro-jitter per step
+  - `humanHover()` — hover over element before clicking
+  - `humanClick()` — hover + delay + click (more realistic than direct click)
+  - `wanderMouse()` — idle organic mouse arcs before main interaction
+- [x] Enhanced `CaptchaService`:
+  - Auto-detect CAPTCHA type on page (`detect()` — hCaptcha, reCAPTCHA v2/v3)
+  - `solveOnPage(page)` — detect + dispatch to correct solver automatically
+  - hCaptcha support via 2captcha
+  - reCAPTCHA v3 support via 2captcha
+  - `solveRecaptchaV2/V3/HCaptcha` all route through single `solve2Captcha()` helper
+- [x] Enhanced `OrchestratorService`:
+  - 3-attempt retry loop — auto-retries with fresh browser context on failure
+  - Block detection — checks URL patterns (`/checkpoint/`, `/authwall`, `/login`) and page title for block signals
+  - HTTP 403/429 detection from navigation response status
+  - CAPTCHA auto-solve integrated into navigation flow
+  - Token injection into `g-recaptcha-response` / `h-captcha-response` textarea after solve
+  - Proxy ban marking on detected blocks
+  - `wanderMouse` + `simulateReading` + `humanScroll` before every scrape
+- [x] `ProxyModule` wired into `OrchestratorModule` (was missing)
+- [x] Phase 3 smoke test script created: `npm run smoke:phase3` (headless) or `npm run smoke:phase3:headful`
+  - Proxy rotation check — compares IPs across two contexts (requires `PROXY_POOL`)
+  - LinkedIn public profile page — block/CAPTCHA/content checks
+  - LinkedIn jobs search page — block/CAPTCHA/content checks
+  - Offline proxy pool parse check (no network needed)
+- [ ] Test proxy rotation live — set `PROXY_POOL` and run `npm run smoke:phase3` to confirm distinct IPs
+- [ ] Test full anti-detection stack against LinkedIn guest pages — run `npm run smoke:phase3`
 - [ ] Monitor block rate — target < 5% per session
 
 ### Key Environment Variables
@@ -161,10 +214,10 @@ SCRAPER_MAX_DELAY_MS=10000
   - Validate: name, headline, location, about, experience, education, skills
 - [ ] Test `LinkedInJobsParser` against 5 job search result pages
   - Validate: title, company, location, postedAt, jobUrl
-- [ ] Build `LinkedInCompanyParser` for company overview pages
-- [ ] Handle parse errors gracefully — store `parseError: true` in DB instead of crashing
+- [x] Build `LinkedInCompanyParser` for company overview pages (+ company normalizer)
+- [x] Handle parse errors gracefully — `OrchestratorService.parseSafely()` stores `{ parseError: true }` with `status: 'failed'` instead of retrying
 - [ ] Add selector versioning — LinkedIn changes selectors frequently
-- [ ] Write unit tests for each parser with fixture HTML files
+- [x] Write unit tests for each parser with fixture HTML files (`src/pipeline/parsers/__fixtures__/`)
 
 ### Parser Unit Test Pattern
 ```typescript
@@ -189,40 +242,47 @@ describe('LinkedInProfileParser', () => {
 
 ---
 
-## Phase 5 — Hardening & Observability
+## Phase 5 — Hardening & Observability 🔄 (In Progress)
 
 **Goal**: Production-ready reliability, monitoring, and cost control.
 
 ### Reliability
-- [ ] Circuit breaker — stop retrying after 5 consecutive failures on same domain
-- [ ] Dead letter queue — capture permanently failed jobs for manual review
-- [ ] Graceful shutdown — drain in-flight jobs before process exit
-- [ ] Stale session cleanup — `SessionManagerService.purgeExpired()` on cron
+- [x] Circuit breaker — `CircuitBreakerService` — open after 5 consecutive failures, 5-min half-open recovery
+  - Wired into `OrchestratorService.run()` — rejects jobs instantly when circuit is open
+- [x] Dead letter queue — `removeOnFail: false` in BullMQ queue config; permanently failed jobs logged with attempt count; inspectable via BullMQ board or Redis
+- [x] Graceful shutdown — `app.enableShutdownHooks()` in `main.ts`; `BrowserPoolService` implements `OnApplicationShutdown` and calls `destroyAll()` on SIGTERM
+- [x] Stale session cleanup — `SessionManagerService.purgeExpired()` runs every 5 min (interval started in `onModuleInit`)
 
 ### Observability
-- [ ] Prometheus metrics endpoint (`/metrics`) via `nestjs-prometheus`
-  - `scraper_jobs_total` (counter, by target + status)
-  - `scraper_block_rate` (gauge)
-  - `scraper_job_duration_seconds` (histogram)
-  - `browser_pool_size` (gauge)
-- [ ] Grafana dashboard — import from `infra/grafana/dashboards/`
-- [ ] Alert rules:
-  - Block rate > 10% → Slack/email notification
-  - Queue depth > 500 → scale warning
-  - DB connection pool exhausted → critical alert
+- [x] Prometheus metrics endpoint (`/metrics`) — `MetricsService` + `MetricsController` wired in `MonitoringModule`
+  - `scraper_jobs_total` (counter, by target + status: success / failed / cached / circuit_open)
+  - `scraper_block_rate` (gauge, rolling 100-request window)
+  - `scraper_job_duration_seconds` (histogram, p50/p95 by target)
+  - `browser_pool_size` (gauge, updated on acquire/destroy)
+- [x] Grafana dashboard — `infra/grafana/dashboards/scraper.json` (6 panels: job rate, block rate, pool size, duration p50/p95, failed jobs stat, cache hits stat)
+- [x] Alert rules — `infra/prometheus/alerts.yml`: block rate > 10%, queue depth > 500 (`scraper_queue_depth` gauge), failure ratio > 25%, scraper down
+  - Prometheus + Grafana (auto-provisioned) via `docker compose --profile monitoring up -d`
+  - [ ] Route alerts to Slack/email (needs an Alertmanager + webhook URL)
+  - [ ] DB connection pool exhausted → critical alert (needs a postgres exporter)
 
 ### Scaling
+- [x] Worker concurrency tuning via `SCRAPER_CONCURRENCY` env var (default: 2) — read via `ConfigService` in `onModuleInit` so `.env` is respected
+- [x] `Dockerfile` (multi-stage, Playwright base image) — required by `docker compose up app`
 - [ ] Horizontal worker scaling — run multiple `OrchestratorProcessor` instances
   ```bash
   docker compose up --scale app=3
   ```
-- [ ] Worker concurrency tuning via `SCRAPER_CONCURRENCY` env var
 - [ ] Redis cluster mode for high availability
 
 ### Cost Controls
-- [ ] Cache scraped URLs in Redis (TTL: 24h) — skip re-scraping same URL
+- [x] Cache scraped URLs in Redis (TTL: 24h) — `UrlCacheService` wired into `OrchestratorService`; cache hits skip scraping entirely and return `{ cached: true, url }`
 - [ ] Proxy bandwidth monitoring — alert at 80% monthly quota
 - [ ] CAPTCHA solve budget limit per job
+
+### Key Environment Variables
+```env
+SCRAPER_CONCURRENCY=2          # worker thread concurrency per instance
+```
 
 ### Acceptance Criteria
 - System recovers automatically from proxy rotation failures
@@ -263,6 +323,7 @@ describe('LinkedInProfileParser', () => {
 | `GET` | `/results/:id` | Get result by UUID |
 | `GET` | `/results/job/:jobId` | Get result by job ID |
 | `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/docs` | Swagger UI |
 
 ### Example: Submit a LinkedIn Profile Scrape

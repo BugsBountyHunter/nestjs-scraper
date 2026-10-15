@@ -28,7 +28,7 @@ describe('BrowserPoolService', () => {
   describe('acquire()', () => {
     it('creates a new context when pool is empty', async () => {
       const ctx = makeMockContext();
-      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {} });
+      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {}, userDataDir: '' });
 
       const result = await pool.acquire();
 
@@ -38,7 +38,7 @@ describe('BrowserPoolService', () => {
 
     it('reuses an idle context instead of creating a new one', async () => {
       const ctx = makeMockContext();
-      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {} });
+      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {}, userDataDir: '' });
 
       const first = await pool.acquire();
       pool.release(first);
@@ -52,8 +52,8 @@ describe('BrowserPoolService', () => {
       const ctx1 = makeMockContext();
       const ctx2 = makeMockContext();
       mockFactory.createContext
-        .mockResolvedValueOnce({ context: ctx1, profile: {} })
-        .mockResolvedValueOnce({ context: ctx2, profile: {} });
+        .mockResolvedValueOnce({ context: ctx1, profile: {}, userDataDir: '' })
+        .mockResolvedValueOnce({ context: ctx2, profile: {}, userDataDir: '' });
 
       const a = await pool.acquire();
       const b = await pool.acquire();
@@ -66,7 +66,7 @@ describe('BrowserPoolService', () => {
   describe('release()', () => {
     it('marks the context as idle so it can be reused', async () => {
       const ctx = makeMockContext();
-      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {} });
+      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {}, userDataDir: '' });
 
       const acquired = await pool.acquire();
       pool.release(acquired);
@@ -85,7 +85,7 @@ describe('BrowserPoolService', () => {
   describe('destroy()', () => {
     it('removes the context from the pool and calls close()', async () => {
       const ctx = makeMockContext();
-      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {} });
+      mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {}, userDataDir: '' });
 
       const acquired = await pool.acquire();
       await pool.destroy(acquired);
@@ -93,7 +93,7 @@ describe('BrowserPoolService', () => {
       expect(ctx.close).toHaveBeenCalledTimes(1);
 
       // Pool is empty — a new context must be created on next acquire
-      mockFactory.createContext.mockResolvedValueOnce({ context: makeMockContext(), profile: {} });
+      mockFactory.createContext.mockResolvedValueOnce({ context: makeMockContext(), profile: {}, userDataDir: '' });
       await pool.acquire();
       expect(mockFactory.createContext).toHaveBeenCalledTimes(2);
     });
@@ -103,7 +103,7 @@ describe('BrowserPoolService', () => {
     it('closes all pooled contexts', async () => {
       const contexts = [makeMockContext(), makeMockContext(), makeMockContext()];
       contexts.forEach((ctx) =>
-        mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {} }),
+        mockFactory.createContext.mockResolvedValueOnce({ context: ctx, profile: {}, userDataDir: '' }),
       );
 
       await pool.acquire();
@@ -118,7 +118,7 @@ describe('BrowserPoolService', () => {
   describe('acquire/release cycle — 20 iterations', () => {
     it('does not grow the pool beyond the number of concurrent contexts needed', async () => {
       const ctx = makeMockContext();
-      mockFactory.createContext.mockResolvedValue({ context: ctx, profile: {} });
+      mockFactory.createContext.mockResolvedValue({ context: ctx, profile: {}, userDataDir: '' });
 
       for (let i = 0; i < 20; i++) {
         const c = await pool.acquire();

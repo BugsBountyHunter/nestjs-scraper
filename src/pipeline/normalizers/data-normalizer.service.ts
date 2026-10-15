@@ -15,6 +15,8 @@ export class DataNormalizerService {
         return this.normalizeProfile(base);
       case ScraperTarget.LINKEDIN_JOBS:
         return this.normalizeJobs(base);
+      case ScraperTarget.LINKEDIN_COMPANY:
+        return this.normalizeCompany(base);
       default:
         return base;
     }
@@ -39,6 +41,16 @@ export class DataNormalizerService {
         company: this.cleanString(job.company as string),
         location: this.cleanString(job.location as string),
       })),
+    };
+  }
+
+  private normalizeCompany(data: Record<string, unknown>): Record<string, unknown> {
+    return {
+      ...data,
+      name: this.cleanString(data.name as string),
+      about: this.cleanString(data.about as string),
+      industry: this.cleanString(data.industry as string),
+      headquarters: this.cleanString(data.headquarters as string),
     };
   }
 

@@ -27,8 +27,11 @@ nestjs-scraper/
 │   │   ├── normalizers/        # Data cleaning & normalization
 │   │   └── storage/            # PostgreSQL persistence
 │   ├── queue/                  # BullMQ global queue registration
-│   └── monitoring/             # Health checks (Terminus)
-├── docker-compose.yml          # PostgreSQL + Redis
+│   └── monitoring/             # Health checks (Terminus) + Prometheus /metrics
+├── infra/                      # Prometheus alerts + Grafana dashboards/provisioning
+├── scripts/                    # Smoke tests, fixture capture, diagnostics/
+├── Dockerfile                  # Multi-stage build on Playwright image
+├── docker-compose.yml          # App + PostgreSQL + Redis (+ monitoring profile)
 ├── .env.example                # All environment variables documented
 └── IMPLEMENTATION_PHASES.md    # Detailed phase-by-phase implementation log
 ```
@@ -86,6 +89,27 @@ npm run start:dev
 
 - Swagger UI: http://localhost:3000/api/docs
 - Health check: http://localhost:3000/health
+- Prometheus metrics: http://localhost:3000/metrics
+
+### Run everything in Docker
+
+```bash
+docker compose up -d --build                      # app + postgres + redis
+docker compose --profile monitoring up -d         # + Prometheus (:9090) + Grafana (:3001)
+docker compose up -d --scale app=3                # horizontal worker scaling
+```
+
+### Development scripts
+
+| Script | Purpose |
+|--------|---------|
+| `npm test` / `npm run test:cov` | Unit tests / coverage |
+| `npm run lint` / `npm run lint:fix` | ESLint (flat config in `eslint.config.mjs`) |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run smoke:stealth` / `smoke:phase3` | Live anti-detection smoke tests |
+| `npm run capture:fixtures` | Refresh parser fixture HTML |
+
+One-off pixelscan investigation scripts live in `scripts/diagnostics/`.
 
 ---
 
@@ -94,12 +118,13 @@ npm run start:dev
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/jobs` | Submit a scraping job |
-| `GET` | `/jobs` | List all jobs (paginated) |
+| `GET` | `/jobs` | List all jobs (`?limit=1..100&offset=0`) |
 | `GET` | `/jobs/:id` | Get job status |
 | `GET` | `/results` | List scraped results (paginated) |
 | `GET` | `/results/:id` | Get result by UUID |
 | `GET` | `/results/job/:jobId` | Get result by job ID |
 | `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/docs` | Swagger UI |
 
 ### Submit a scraping job
@@ -163,7 +188,9 @@ Bypass Akamai Bot Manager and DataDome detection layers.
 - CAPTCHA solver integration (`CaptchaService`)
 - Target: < 5% block rate per session
 
-### Phase 4 — LinkedIn Parsers _(planned)_
+> Job URLs must be `https://` LinkedIn URLs — other hosts are rejected to prevent SSRF via the headless browser.
+
+### Phase 4 — LinkedIn Parsers _(in progress)_
 
 Structured data extraction for LinkedIn profiles, jobs, and company pages.
 
@@ -173,12 +200,12 @@ Structured data extraction for LinkedIn profiles, jobs, and company pages.
 | `linkedin_jobs` | `/jobs/search` | `LinkedInJobsParser` |
 | `linkedin_company` | `/company/name` | `LinkedInCompanyParser` |
 
-### Phase 5 — Hardening & Observability _(planned)_
+### Phase 5 — Hardening & Observability _(in progress)_
 
 Production-ready reliability and monitoring.
 
 - Prometheus metrics (`/metrics`) — job counters, block rate, duration histograms
-- Grafana dashboard
+- Grafana dashboard + Prometheus alert rules (`infra/`)
 - Circuit breaker + dead letter queue
 - Horizontal worker scaling via `docker compose up --scale app=3`
 - Redis URL caching (TTL: 24h) for cost control
@@ -205,11 +232,18 @@ SKIP_NETWORK=true npm run smoke:stealth
 See [.env.example](.env.example) for the full list. Key variables:
 
 ```env
-DATABASE_URL=postgresql://user:pass@localhost:5432/scraper
-REDIS_URL=redis://localhost:6379
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=postgres
+DB_DATABASE=nestjs_scraper
+REDIS_HOST=localhost
+REDIS_PORT=6379
 PROXY_POOL=user1:pass1@gate.provider.com:7000,user2:pass2@gate.provider.com:7001
 CAPTCHA_API_KEY=your_2captcha_key
-SCRAPER_CONCURRENCY=3
+LINKEDIN_COOKIES_FILE=./linkedin-cookies.json   # optional, gitignored
+SCRAPER_CONCURRENCY=2
+SCRAPER_JOB_ATTEMPTS=2          # BullMQ attempts (each runs up to 3 in-process retries)
 SCRAPER_MIN_DELAY_MS=3000
 SCRAPER_MAX_DELAY_MS=10000
 ```

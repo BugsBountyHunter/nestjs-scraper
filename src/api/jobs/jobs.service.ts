@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, Job, JobType } from 'bullmq';
-import { CreateJobDto } from './dto/create-job.dto';
+import { CreateJobDto, JobPriority } from './dto/create-job.dto';
 import { JobResponseDto, JobStatus } from './dto/job-response.dto';
 
-const PRIORITY_MAP: Record<string, number> = {
+const PRIORITY_MAP: Record<JobPriority, number> = {
   high: 1,
   normal: 5,
   low: 10,
@@ -14,7 +15,18 @@ const SCRAPER_QUEUE = 'scraper';
 
 @Injectable()
 export class JobsService {
-  constructor(@InjectQueue(SCRAPER_QUEUE) private readonly scraperQueue: Queue) {}
+  private readonly attempts: number;
+  private readonly backoffDelayMs: number;
+
+  constructor(
+    @InjectQueue(SCRAPER_QUEUE) private readonly scraperQueue: Queue,
+    config: ConfigService,
+  ) {
+    // Each BullMQ attempt already retries up to 3× internally with a fresh
+    // browser context, so keep queue-level attempts low.
+    this.attempts = Number(config.get('SCRAPER_JOB_ATTEMPTS', 2));
+    this.backoffDelayMs = Number(config.get('SCRAPER_BACKOFF_DELAY', 5000));
+  }
 
   async enqueue(createJobDto: CreateJobDto): Promise<JobResponseDto> {
     const priority = PRIORITY_MAP[createJobDto.priority ?? 'normal'];
@@ -28,8 +40,8 @@ export class JobsService {
       },
       {
         priority,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
+        attempts: this.attempts,
+        backoff: { type: 'exponential', delay: this.backoffDelayMs },
         removeOnComplete: false,
         removeOnFail: false,
       },

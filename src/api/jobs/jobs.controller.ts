@@ -13,9 +13,9 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
-  ApiQuery,
-  ApiTags,
+    ApiTags,
 } from '@nestjs/swagger';
+import { PaginationQueryDto } from '../common/pagination-query.dto';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobResponseDto } from './dto/job-response.dto';
@@ -36,13 +36,8 @@ export class JobsController {
   @Get()
   @ApiOperation({ summary: 'List all scraping jobs' })
   @ApiOkResponse({ type: [JobResponseDto] })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'offset', required: false, type: Number })
-  list(
-    @Query('limit') limit = 20,
-    @Query('offset') offset = 0,
-  ): Promise<JobResponseDto[]> {
-    return this.jobsService.listJobs(+limit, +offset);
+  list(@Query() { limit, offset }: PaginationQueryDto): Promise<JobResponseDto[]> {
+    return this.jobsService.listJobs(limit, offset);
   }
 
   @Get(':id')

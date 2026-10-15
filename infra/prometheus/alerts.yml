@@ -1,0 +1,36 @@
+groups:
+  - name: scraper
+    rules:
+      - alert: ScraperHighBlockRate
+        expr: scraper_block_rate > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Block rate above 10%'
+          description: 'Rolling block rate is {{ $value | humanizePercentage }} — rotate proxies or slow down.'
+
+      - alert: ScraperQueueBacklog
+        expr: scraper_queue_depth > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Scraper queue depth above 500'
+          description: '{{ $value }} jobs waiting — consider scaling workers (docker compose up --scale app=N).'
+
+      - alert: ScraperJobsFailing
+        expr: sum(rate(scraper_jobs_total{status="failed"}[10m])) / clamp_min(sum(rate(scraper_jobs_total[10m])), 1e-9) > 0.25
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'More than 25% of scraping jobs are failing'
+
+      - alert: ScraperDown
+        expr: up{job="nestjs-scraper"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Scraper /metrics endpoint is unreachable'

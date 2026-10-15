@@ -34,10 +34,14 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   app.enableCors();
+  app.enableShutdownHooks();
 
   await app.listen(port);
   logger.log(`Application running on http://localhost:${port}`);
   logger.log(`Swagger docs at http://localhost:${port}/api/docs`);
 }
 
-bootstrap();
+bootstrap().catch((err: unknown) => {
+  new Logger('Bootstrap').error('Failed to start application', err instanceof Error ? err.stack : String(err));
+  process.exit(1);
+});

@@ -13,8 +13,8 @@ export class ScrapeResult {
   id: string;
 
   @Index()
-  @Column({ nullable: true })
-  jobId: string;
+  @Column({ type: 'varchar', nullable: true })
+  jobId: string | null;
 
   @Index()
   @Column()

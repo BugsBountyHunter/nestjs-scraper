@@ -39,3 +39,15 @@ Thumbs.db
 
 # Nest CLI
 .nestjs-cache/
+
+# Secrets — real LinkedIn session cookies
+linkedin-cookies.json
+
+# Fixture-capture / diagnostic output
+/tmp-diag/
+
+# graphify — keep report/graph, ignore cache and machine-local state
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+graphify-out/.graphify_*
