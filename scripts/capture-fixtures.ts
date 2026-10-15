@@ -18,6 +18,7 @@ import * as os from 'os';
 import * as dotenv from 'dotenv';
 import { chromium } from 'playwright-extra';
 import type { BrowserContext } from 'playwright';
+import { anonymizeFixtureHtml } from '../src/pipeline/parsers/testing/anonymize-fixture';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
@@ -31,17 +32,19 @@ const HEADLESS = process.env.HEADLESS !== 'false';
 const PROXY_POOL = process.env.PROXY_POOL ?? '';
 const FIXTURES_DIR = path.join(__dirname, '../src/pipeline/parsers/__fixtures__');
 
+const PROFILE_URL =
+  process.env.FIXTURE_PROFILE_URL ??
+  (process.env.LINKEDIN_PROFILE_ID ? `https://www.linkedin.com/in/${process.env.LINKEDIN_PROFILE_ID}/` : undefined);
+
 const TARGETS = [
   {
     name: 'jobs',
     url: process.env.FIXTURE_JOBS_URL ?? 'https://www.linkedin.com/jobs/search/?keywords=software+engineer&location=Remote',
     file: 'jobs.html',
   },
-  {
-    name: 'profile',
-    url: process.env.FIXTURE_PROFILE_URL ?? `https://www.linkedin.com/in/${process.env.LINKEDIN_PROFILE_ID ?? 'ahmed-saber-1b549ab4'}/`,
-    file: 'profile.html',
-  },
+  // No default profile: capturing a specific person must be an explicit choice
+  // (your own profile, or one you are authorized to use). Skipped when unset.
+  ...(PROFILE_URL ? [{ name: 'profile', url: PROFILE_URL, file: 'profile.html' }] : []),
   {
     name: 'company',
     url: process.env.FIXTURE_COMPANY_URL ?? 'https://www.linkedin.com/company/google/',
@@ -98,7 +101,8 @@ async function capture(name: string, url: string, file: string, proxy?: ParsedPr
 
     const html = await page.content();
     const outPath = path.join(FIXTURES_DIR, file);
-    fs.writeFileSync(outPath, html, 'utf8');
+    // Never write raw captures: strip member names, photos and session ids first.
+    fs.writeFileSync(outPath, anonymizeFixtureHtml(html).html, 'utf8');
 
     const kb = Math.round(html.length / 1024);
     console.log(`[${name}] Saved ${kb} KB → ${outPath}`);
