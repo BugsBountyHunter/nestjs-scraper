@@ -252,4 +252,6 @@ SCRAPER_MAX_DELAY_MS=10000
 
 ## License
 
-UNLICENSED — private use only.
+[MIT](LICENSE) © 2026 Ahmed Saber.
+
+The license covers this code only — it grants no rights to scrape any third-party site. See the legal notice at the top of this README.
