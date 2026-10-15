@@ -2,7 +2,16 @@ import { OrchestratorService } from './orchestrator.service';
 import { ScraperTarget } from '../../api/jobs/dto/create-job.dto';
 import { MetricsService } from '../../monitoring/metrics.service';
 import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
-import { NavigationBlockedError } from '../security/navigation-guard';
+import { NavigationBlockedError, installNavigationGuard } from '../security/navigation-guard';
+
+jest.mock('../security/navigation-guard', () => {
+  const actual = jest.requireActual('../security/navigation-guard');
+  return { ...actual, installNavigationGuard: jest.fn() };
+});
+const mockedInstallGuard = installNavigationGuard as jest.MockedFunction<typeof installNavigationGuard>;
+const passGuard = { blockedUrl: () => null, assertNotBlocked: () => undefined };
+
+beforeEach(() => mockedInstallGuard.mockResolvedValue(passGuard));
 
 const URL = 'https://www.linkedin.com/in/someone/';
 
@@ -14,8 +23,6 @@ function makePage(overrides: Partial<Record<string, jest.Mock>> = {}) {
     title: jest.fn().mockResolvedValue('Someone | LinkedIn'),
     content: jest.fn().mockResolvedValue('<html></html>'),
     close: jest.fn().mockResolvedValue(undefined),
-    route: jest.fn().mockResolvedValue(undefined),
-    mainFrame: jest.fn().mockReturnValue({}),
     ...overrides,
   };
 }
@@ -138,27 +145,14 @@ describe('OrchestratorService', () => {
   });
 
   it('aborts without retrying when a redirect leaves LinkedIn (SSRF guard)', async () => {
-    type RouteHandler = (route: unknown, request: unknown) => unknown;
-    let handler: RouteHandler | undefined;
-    const mainFrame = {};
-    const page = makePage({
-      mainFrame: jest.fn().mockReturnValue(mainFrame),
-      route: jest.fn(async (_p: string, h: RouteHandler) => {
-        handler = h;
-      }),
-      // Simulate LinkedIn's open redirect bouncing to the metadata service
-      goto: jest.fn(async () => {
-        await handler!(
-          { abort: jest.fn(), continue: jest.fn() },
-          {
-            url: () => 'http://169.254.169.254/latest/meta-data',
-            isNavigationRequest: () => true,
-            frame: () => mainFrame,
-          },
-        );
-        throw new Error('net::ERR_BLOCKED_BY_CLIENT');
-      }),
+    const blocked = 'http://169.254.169.254/latest/meta-data';
+    mockedInstallGuard.mockResolvedValue({
+      blockedUrl: () => blocked,
+      assertNotBlocked: () => {
+        throw new NavigationBlockedError(blocked);
+      },
     });
+    const page = makePage({ goto: jest.fn().mockRejectedValue(new Error('net::ERR_BLOCKED_BY_CLIENT')) });
     const { service, deps, context } = setup(page);
 
     await expect(service.run(job)).rejects.toBeInstanceOf(NavigationBlockedError);

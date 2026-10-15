@@ -12,6 +12,7 @@ describe('isAllowedTargetUrl', () => {
   it.each([
     'http://www.linkedin.com/in/x',
     'https://www.linkedin.com:22/',
+    'https://www.linkedin.com./in/x',
     'https://www.linkedin.com:8443/in/x',
     'https://user:pass@www.linkedin.com/in/x',
     'https://www.linkedin.com@evil.com/',
@@ -43,6 +44,13 @@ describe('isInternalUrl', () => {
     'http://redis/',
     'http://api.internal/',
     'http://printer.local/',
+    'http://localhost./',
+    'http://redis./',
+    'http://metadata.google.internal./',
+    'http://LOCALHOST../',
+    'http://2130706433/',
+    'http://0x7f.1/',
+    'http://[::127.0.0.1]/',
   ])('flags %s as internal', (url) => expect(isInternalUrl(url)).toBe(true));
 
   it.each([

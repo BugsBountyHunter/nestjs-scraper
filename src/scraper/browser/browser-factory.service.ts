@@ -53,6 +53,9 @@ export class BrowserFactoryService implements OnModuleInit {
       locale: profile.locale,
       timezoneId: profile.timezone,
       colorScheme: 'light',
+      // Service-worker requests bypass context.route — block SWs so the SSRF
+      // navigation guard sees every request.
+      serviceWorkers: 'block',
       extraHTTPHeaders: {
         'Accept-Language': profile.locale,
         'sec-ch-ua': this.fingerprintService.buildSecChUa(profile.userAgent),

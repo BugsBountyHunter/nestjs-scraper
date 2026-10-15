@@ -11,6 +11,11 @@
 const LINKEDIN_HOST = /^([a-z]{2,3}\.|www\.)?linkedin\.com$/;
 const INTERNAL_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.home.arpa'];
 
+/** Lower-case and drop trailing dots — `localhost.` and `redis.` resolve like their dot-less forms. */
+export function canonicalHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/\.+$/, '');
+}
+
 function parse(raw: string): URL | null {
   try {
     return new URL(raw);
@@ -27,11 +32,11 @@ export function isAllowedTargetUrl(raw: string): boolean {
     url.port === '' && // URL normalises :443 to '' — any other port is rejected
     url.username === '' &&
     url.password === '' &&
-    LINKEDIN_HOST.test(url.hostname) // hostname is already lower-cased by URL
+    LINKEDIN_HOST.test(url.hostname) // exact match: a trailing-dot host (`linkedin.com.`) is rejected
   );
 }
 
-function isPrivateIpv4(host: string): boolean {
+export function isPrivateIpv4(host: string): boolean {
   const parts = host.split('.').map(Number);
   if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
   const [a, b] = parts;
@@ -46,10 +51,12 @@ function isPrivateIpv4(host: string): boolean {
   );
 }
 
-function isPrivateIpv6(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '');
+export function isPrivateIpv6(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   if (!h.includes(':')) return false;
   if (h === '::' || h === '::1') return true;
+  // Deprecated IPv4-compatible ::a.b.c.d (URL rewrites to ::7f00:1)
+  if (/^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/.test(h) || /^::\d+\.\d+\.\d+\.\d+$/.test(h)) return true;
   const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isPrivateIpv4(mapped[1]);
   // WHATWG URL rewrites ::ffff:127.0.0.1 as ::ffff:7f00:1
@@ -62,7 +69,8 @@ function isPrivateIpv6(host: string): boolean {
 }
 
 export function isInternalHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = canonicalHost(hostname);
+  if (host === '') return true;
   if (host === 'localhost' || INTERNAL_SUFFIXES.some((s) => host.endsWith(s))) return true;
   if (isPrivateIpv4(host) || isPrivateIpv6(host)) return true;
   return !host.includes('.') && !host.includes(':'); // single-label: postgres, redis, metadata…
